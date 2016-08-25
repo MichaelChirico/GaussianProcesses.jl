@@ -3,26 +3,27 @@ import Base.show
 # Main GaussianProcess type
 
 @doc """
-# Description
-Fits a Gaussian process to a set of training points. The Gaussian process is defined in terms of its mean and covaiance (kernel) functions, which are user defined. As a default it is assumed that the observations are noise free.
+    # Description
+    Fits a Gaussian process to a set of training points. The Gaussian process is defined in terms of its mean and covaiance (kernel) functions, which are user defined. As a default it is assumed that the observations are noise free.
 
-# Constructors:
-    GP(X, y, m, k, logNoise)
-    GP(; m=MeanZero(), k=SE(0.0, 0.0), logNoise=-1e8) # observation-free constructor
+    # Constructors:
+        GP(X, y, m, k, logNoise)
+        GP(; m=MeanZero(), k=SE(0.0, 0.0), logNoise=-1e8) # observation-free constructor
 
-# Arguments:
-* `X::Matrix{Float64}`: Input observations
-* `y::Vector{Float64}`: Output observations
-* `m::Mean`           : Mean function
-* `k::kernel`         : Covariance function
-* `logNoise::Float64` : Log of the standard deviation for the observation noise. The default is -1e8, which is equivalent to assuming no observation noise.
+    # Arguments:
+    * `X::Matrix{Float64}`: Input observations
+    * `y::Vector{Float64}`: Output observations
+    * `m::Mean`           : Mean function
+    * `k::kernel`         : Covariance function
+    * `logNoise::Float64` : Log of the standard deviation for the observation noise. The default is -1e8, which is equivalent to assuming no observation noise.
 
-# Returns:
-* `gp::GP`            : Gaussian process object, fitted to the training data if provided
-""" ->
+    # Returns:
+    * `gp::GP`            : Gaussian process object, fitted to the training data if provided
+    """ ->
 type GP
     m:: Mean                # Mean object
     k::Kernel               # Kernel object
+    lik::Likelihood         # Likelihood is Gaussian for GP regression
     logNoise::Float64       # log standard deviation of observation noise
     
     # Observation data
@@ -33,8 +34,10 @@ type GP
     dim::Int                # Dimension of inputs
     
     # Auxiliary data
+    v::Vector{Float64}      # latent whitened variables - N(0,1)
     cK::AbstractPDMat       # (k + exp(2*obsNoise))
     alpha::Vector{Float64}  # (k + exp(2*obsNoise))⁻¹y
+    ll::Float64             # Log-likelihood of general GP model
     mLL::Float64            # Marginal log-likelihood
     dmLL::Vector{Float64}   # Gradient marginal log-likelihood
     
@@ -47,24 +50,43 @@ type GP
     end
     
     GP(; m=MeanZero(), k=SE(0.0, 0.0), logNoise=-1e8) =  new(m, k, logNoise, 0)
+
+    function GP(X::Matrix{Float64}, y::Vector{Float64}, m::Mean, k::Kernel, lik::Likelihood, logNoise::Float64=-1e8)
+        dim, nobsv = size(X)
+        length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
+        #=
+        This is a vanilla implementation of a GP with a non-Gaussian
+        likelihood. The latent function values are represented by centered
+        (whitened) variables, so
+        v ~ N(0, I)
+        f = Lv + m(x)
+        with
+        L L^T = K
+        =#
+        gp = new(m, k, lik, logNoise, nobsv, X, y, KernelData(k, X), dim)
+        likelihood!(gp)
+        return gp
+    end
+
     
 end
 
 # Creates GP object for 1D case
 GP(x::Vector{Float64}, y::Vector{Float64}, meanf::Mean, kernel::Kernel, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, logNoise)
+GP(x::Vector{Float64}, y::Vector{Float64}, meanf::Mean, kernel::Kernel, lik::Likelihood, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, lik, logNoise)
 
 @doc """
-# Description
-Fits an existing Gaussian process to a set of training points.
+    # Description
+    Fits an existing Gaussian process to a set of training points.
 
-# Arguments:
-* `gp::GP`: Exiting Gaussian process object
-* `X::Matrix{Float64}`: Input observations
-* `y::Vector{Float64}`: Output observations
+    # Arguments:
+    * `gp::GP`: Exiting Gaussian process object
+    * `X::Matrix{Float64}`: Input observations
+    * `y::Vector{Float64}`: Output observations
 
-# Returns:
-* `gp::GP`            : A Gaussian process fitted to the training data
-""" ->
+    # Returns:
+    * `gp::GP`            : A Gaussian process fitted to the training data
+    """ ->
 function fit!(gp::GP, X::Matrix{Float64}, y::Vector{Float64})
     length(y) == size(X,2) || throw(ArgumentError("Input and output observations must have consistent dimensions."))
     gp.X = X
@@ -78,7 +100,7 @@ end
 fit!(gp::GP, x::Vector{Float64}, y::Vector{Float64}) = fit!(gp, x', y)
 
 
-# Update auxiliarly data in GP object after changes have been made
+# Update auxiliarly data in GP object after changes have been made and calculate the exact marginal log-likelihood assuming Gaussian observations
 function update_mll!(gp::GP)
     μ = mean(gp.m,gp.X)
     Σ = cov(gp.k, gp.X, gp.data)
@@ -87,8 +109,7 @@ function update_mll!(gp::GP)
     gp.mLL = -dot((gp.y - μ),gp.alpha)/2.0 - logdet(gp.cK)/2.0 - gp.nobsv*log(2π)/2.0 # Marginal log-likelihood
 end
 
-# Update gradient of marginal log likelihood
-
+# Update gradient of marginal log-likelihood
 function update_mll_and_dmll!(gp::GP; noise::Bool=true, mean::Bool=true, kern::Bool=true)
     update_mll!(gp::GP)
     gp.dmLL = Array(Float64, noise + mean*num_params(gp.m) + kern*num_params(gp.k))
@@ -117,37 +138,51 @@ function update_mll_and_dmll!(gp::GP; noise::Bool=true, mean::Bool=true, kern::B
     end
 end
 
+#Likelihood function of general GP model
+function likelihhod!(gp::GP)
+    # log p(Y,v|θ) 
+    μ = mean(gp.m,gp.X)
+    Σ = cov(gp.k, gp.X, gp.data)
+    gp.cK = PDMat(Σ + 1e-8*eye(gp.nobsv))
+    F = gp.cK*randn(gp.nobsv) + μ
+    gp.ll = sum(loglik(gp.lik,F,gp.y))
+end
+
 
 @doc """
-# Description
-Calculates the posterior mean and variance of Gaussian Process at specified points
+    # Description
+    Calculates the posterior mean and variance of Gaussian Process at specified points
 
-# Arguments:
-* `gp::GP`: Gaussian Process object
-* `X::Matrix{Float64}`:  matrix of points for which one would would like to predict the value of the process.
-                       (each column of the matrix is a point)
+    # Arguments:
+    * `gp::GP`: Gaussian Process object
+    * `X::Matrix{Float64}`:  matrix of points for which one would would like to predict the value of the process.
+                           (each column of the matrix is a point)
 
-# Keyword Arguments
-* `full_cov::Bool`: indicates whether full covariance matrix should be returned instead of only variances (default is false)
+    # Keyword Arguments
+    * `full_cov::Bool`: indicates whether full covariance matrix should be returned instead of only variances (default is false)
 
-# Returns:
-* `(mu, Sigma)::(Vector{Float64}, Vector{Float64})`: respectively the posterior mean  and variances of the posterior
-                                                    process at the specified points
-""" ->
+    # Returns:
+    * `(mu, Sigma)::(Vector{Float64}, Vector{Float64})`: respectively the posterior mean  and variances of the posterior
+                                                        process at the specified points
+    """ ->
 function predict(gp::GP, x::Matrix{Float64}; full_cov::Bool=false)
     size(x,1) == gp.dim || throw(ArgumentError("Gaussian Process object and input observations do not have consistent dimensions"))
-    if full_cov
-        return _predict(gp, x)
+    if gp.lik=="Gaussian"
+        return μ + mean(gp.m,x), σ2 = conditional()
     else
-        ## Calculate prediction for each point independently
+        if full_cov
+            return _predict(gp, x)
+        else
+            ## Calculate prediction for each point independently
             μ = Array(Float64, size(x,2))
             σ2 = similar(μ)
-        for k in 1:size(x,2)
-            m, sig = _predict(gp, x[:,k:k])
-            μ[k] = m[1]
-            σ2[k] = max(full(sig)[1,1], 0.0)
+            for k in 1:size(x,2)
+                m, sig = _predict(gp, x[:,k:k])
+                μ[k] = m[1]
+                σ2[k] = max(full(sig)[1,1], 0.0)
+            end
+            return μ, σ2
         end
-        return μ, σ2
     end
 end
 
@@ -230,7 +265,12 @@ function show(io::IO, gp::GP)
         print(io,"\n  Output observations = ")
         show(io, gp.y)
         print(io,"\n  Variance of observation noise = $(exp(2*gp.logNoise))")
-        print(io,"\n  Marginal Log-Likelihood = ")
-        show(io, round(gp.mLL,3))
+        if gp.lik=="Gaussian"
+            print(io,"\n  Marginal Log-Likelihood = ")
+            show(io, round(gp.mLL,3))
+        else
+            print(io,"\n  Log-Likelihood = ")
+            show(io, round(gp.ll,3))
+        end            
     end
 end
