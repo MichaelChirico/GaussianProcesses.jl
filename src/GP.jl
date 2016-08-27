@@ -167,7 +167,7 @@ end
     """ ->
 function predict(gp::GP, x::Matrix{Float64}; full_cov::Bool=false)
     size(x,1) == gp.dim || throw(ArgumentError("Gaussian Process object and input observations do not have consistent dimensions"))
-    if gp.lik=="Gaussian"
+    if gp.lik!="Gaussian"
         return μ + mean(gp.m,x), σ2 = conditional()
     else
         if full_cov
