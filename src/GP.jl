@@ -24,12 +24,12 @@ type GP
     m:: Mean                # Mean object
     k::Kernel               # Kernel object
     lik::Likelihood         # Likelihood is Gaussian for GP regression
-    logNoise::Float64       # log standard deviation of observation noise
+    # logNoise::Float64       # log standard deviation of observation noise
     
     # Observation data
     nobsv::Int              # Number of observations
     X::Matrix{Float64}      # Input observations
-    y::Vector{Float64}      # Output observations
+    y::Vector      # Output observations
     data::KernelData        # Auxiliary observation data (to speed up calculations)
     dim::Int                # Dimension of inputs
     
@@ -41,17 +41,17 @@ type GP
     mLL::Float64            # Marginal log-likelihood
     dmLL::Vector{Float64}   # Gradient marginal log-likelihood
     
-    function GP(X::Matrix{Float64}, y::Vector{Float64}, m::Mean, k::Kernel, logNoise::Float64=-1e8)
-        dim, nobsv = size(X)
-        length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
-        gp = new(m, k, logNoise, nobsv, X, y, KernelData(k, X), dim)
-        update_mll!(gp)
-        return gp
-    end
+    # function GP(X::Matrix{Float64}, y::Vector{Float64}, m::Mean, k::Kernel, logNoise::Float64=-1e8)
+    #     dim, nobsv = size(X)
+    #     length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
+    #     gp = new(m, k, logNoise, nobsv, X, y, KernelData(k, X), dim)
+    #     update_mll!(gp)
+    #     return gp
+    # end
     
-    GP(; m=MeanZero(), k=SE(0.0, 0.0), logNoise=-1e8) =  new(m, k, logNoise, 0)
+    # GP(; m=MeanZero(), k=SE(0.0, 0.0), logNoise=-1e8) =  new(m, k, logNoise, 0)
 
-    function GP(X::Matrix{Float64}, y::Vector{Float64}, m::Mean, k::Kernel, lik::Likelihood, logNoise::Float64=-1e8)
+    function GP(X::Matrix{Float64}, y::Vector, m::Mean, k::Kernel, lik::Likelihood)
         dim, nobsv = size(X)
         length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
         #=
@@ -63,7 +63,7 @@ type GP
         with
         L L^T = K
         =#
-        gp = new(m, k, lik, logNoise, nobsv, X, y, KernelData(k, X), dim)
+        gp = new(m, k, lik, nobsv, X, y, KernelData(k, X), dim)
         likelihood!(gp)
         return gp
     end
@@ -72,8 +72,8 @@ type GP
 end
 
 # Creates GP object for 1D case
-GP(x::Vector{Float64}, y::Vector{Float64}, meanf::Mean, kernel::Kernel, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, logNoise)
-GP(x::Vector{Float64}, y::Vector{Float64}, meanf::Mean, kernel::Kernel, lik::Likelihood, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, lik, logNoise)
+# GP(x::Vector{Float64}, y::Vector{Float64}, meanf::Mean, kernel::Kernel, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, logNoise)
+# GP(x::Vector{Float64}, y::Vector, meanf::Mean, kernel::Kernel, lik::Likelihood, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, lik)
 
 @doc """
     # Description
@@ -139,7 +139,7 @@ function update_mll_and_dmll!(gp::GP; noise::Bool=true, mean::Bool=true, kern::B
 end
 
 #Likelihood function of general GP model
-function likelihhod!(gp::GP)
+function likelihood!(gp::GP)
     # log p(Y,v|θ) 
     μ = mean(gp.m,gp.X)
     Σ = cov(gp.k, gp.X, gp.data)
@@ -165,19 +165,19 @@ end
     * `(mu, Sigma)::(Vector{Float64}, Vector{Float64})`: respectively the posterior mean  and variances of the posterior
                                                         process at the specified points
     """ ->
-function predict(gp::GP, x::Matrix{Float64}; full_cov::Bool=false)
-    size(x,1) == gp.dim || throw(ArgumentError("Gaussian Process object and input observations do not have consistent dimensions"))
-    if gp.lik!="Gaussian"
-        return μ + mean(gp.m,x), σ2 = conditional()
+function predict(gp::GP, X::Matrix{Float64}; full_cov::Bool=false)
+    size(X,1) == gp.dim || throw(ArgumentError("Gaussian Process object and input observations do not have consistent dimensions"))
+    if typeof(gp.lik)!=Gaussian
+        return μ, σ2 = conditional(gp, X)
     else
         if full_cov
-            return _predict(gp, x)
+            return _predict(gp, X)
         else
             ## Calculate prediction for each point independently
-            μ = Array(Float64, size(x,2))
+            μ = Array(Float64, size(X,2))
             σ2 = similar(μ)
-            for k in 1:size(x,2)
-                m, sig = _predict(gp, x[:,k:k])
+            for k in 1:size(X,2)
+                m, sig = _predict(gp, X[:,k:k])
                 μ[k] = m[1]
                 σ2[k] = max(full(sig)[1,1], 0.0)
             end
@@ -233,6 +233,18 @@ rand(gp::GP, x::Vector{Float64}, n::Int) = rand(gp, x', n)
 rand(gp::GP,X::Matrix{Float64}) = vec(rand(gp,X,1))
 rand(gp::GP,x::Vector{Float64}) = vec(rand(gp,x',1))
 
+function conditional(gp::GP, X::Matrix{Float64})
+    n = size(X, 2)
+    Σ = cov(gp.k, gp.X, gp.data)
+    gp.cK = PDMat(Σ + 1e-6*eye(gp.nobsv))
+    cK = cov(gp.k, X, gp.X)
+    Lck = whiten(gp.cK, cK')
+    Sigma_raw = cov(gp.k, X) - Lck'Lck # Predictive covariance
+    # Hack to get stable covariance
+    fSigma = try PDMat(Sigma_raw) catch; PDMat(Sigma_raw+1e-8*sum(diag(Sigma_raw))/n*eye(n)) end
+    fmu = mean(gp.m,X) + LcK*gp.v        # Predictive mean
+    return fmu, fSigma
+end
 
 function get_params(gp::GP; noise::Bool=true, mean::Bool=true, kern::Bool=true)
     params = Float64[]
@@ -265,12 +277,13 @@ function show(io::IO, gp::GP)
         print(io,"\n  Output observations = ")
         show(io, gp.y)
         print(io,"\n  Variance of observation noise = $(exp(2*gp.logNoise))")
-        if gp.lik=="Gaussian"
-            print(io,"\n  Marginal Log-Likelihood = ")
-            show(io, round(gp.mLL,3))
-        else
+        if typeof(gp.lik)!=Gaussian
             print(io,"\n  Log-Likelihood = ")
             show(io, round(gp.ll,3))
+        else
+            print(io,"\n  Marginal Log-Likelihood = ")
+            show(io, round(gp.mLL,3))
+
         end            
     end
 end
