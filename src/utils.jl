@@ -48,3 +48,4 @@ end
 # Taken from Distributions package
 φ(z::Real) = exp(-0.5*z*z)/√2π
 Φ(z::Real) = 0.5*erfc(-z/√2)
+Φ(z::Array{Float64}) = map(Φ, z)

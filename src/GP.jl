@@ -20,7 +20,7 @@ import Base.show
     # Returns:
     * `gp::GP`            : Gaussian process object, fitted to the training data if provided
     """ ->
-type GP
+type GP{T<:Real}
     m:: Mean                # Mean object
     k::Kernel               # Kernel object
     lik::Likelihood         # Likelihood is Gaussian for GP regression
@@ -29,7 +29,7 @@ type GP
     # Observation data
     nobsv::Int              # Number of observations
     X::Matrix{Float64}      # Input observations
-    y::Vector      # Output observations
+    y::Vector{T}      # Output observations
     data::KernelData        # Auxiliary observation data (to speed up calculations)
     dim::Int                # Dimension of inputs
     
@@ -51,7 +51,7 @@ type GP
     
     # GP(; m=MeanZero(), k=SE(0.0, 0.0), logNoise=-1e8) =  new(m, k, logNoise, 0)
 
-    function GP(X::Matrix{Float64}, y::Vector, m::Mean, k::Kernel, lik::Likelihood)
+    function GP{S<:Real}(X::Matrix{Float64}, y::Vector{S}, m::Mean, k::Kernel, lik::Likelihood)
         dim, nobsv = size(X)
         length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
         #=
@@ -67,8 +67,6 @@ type GP
         likelihood!(gp)
         return gp
     end
-
-    
 end
 
 # Creates GP object for 1D case
@@ -246,18 +244,18 @@ function conditional(gp::GP, X::Matrix{Float64})
     return fmu, fSigma
 end
 
-function get_params(gp::GP; noise::Bool=true, mean::Bool=true, kern::Bool=true)
+function get_params(gp::GP; lik::Bool=true, mean::Bool=true, kern::Bool=true)
     params = Float64[]
-    if noise; push!(params, gp.logNoise); end
+    if lik; push!(params, get_params(gp.lik)); end
     if mean;  append!(params, get_params(gp.m)); end
     if kern; append!(params, get_params(gp.k)); end
     return params
 end
 
-function set_params!(gp::GP, hyp::Vector{Float64}; noise::Bool=true, mean::Bool=true, kern::Bool=true)
+function set_params!(gp::GP, hyp::Vector{Float64}; lik::Bool=true, mean::Bool=true, kern::Bool=true)
     # println("mean=$(mean)")
-    if noise; gp.logNoise = hyp[1]; end
-    if mean; set_params!(gp.m, hyp[1+noise:noise+num_params(gp.m)]); end
+    if lik; set_params!(gp.lik, hyp[1:num_params(gp.lik)]); end
+    if mean; set_params!(gp.m, hyp[1+num_params(gp.lik):num_params(gp.lik)+num_params(gp.m)]); end
     if kern; set_params!(gp.k, hyp[end-num_params(gp.k)+1:end]); end
 end
 
@@ -276,7 +274,6 @@ function show(io::IO, gp::GP)
         show(io, gp.X)
         print(io,"\n  Output observations = ")
         show(io, gp.y)
-        print(io,"\n  Variance of observation noise = $(exp(2*gp.logNoise))")
         if typeof(gp.lik)!=Gaussian
             print(io,"\n  Log-Likelihood = ")
             show(io, round(gp.ll,3))

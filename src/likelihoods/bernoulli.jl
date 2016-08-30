@@ -11,7 +11,8 @@ type Bernoulli <: Likelihood
 end
 
 function loglik(bernoulli::Bernoulli, f::Vector{Float64}, y::Vector{Bool})
-    return Distributions.logpdf(Distributions.Bernoulli(Φ(f)),y)
+    return Float64[yi? log(Φ(fi)) : 1.0 - log(Φ(fi)) for (fi,yi) in zip(f,y)]
 end
 
 get_params(bernoulli::Bernoulli) = []
+num_params(bernoulli::Bernoulli) = 0

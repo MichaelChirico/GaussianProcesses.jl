@@ -1,5 +1,5 @@
 module GaussianProcesses
-using Optim, PDMats, Distances, ArrayViews
+using Optim, PDMats, Distances, ArrayViews, Distributions
 
 import Base: +, *
 import Base: rand, rand!, mean, cov
@@ -10,10 +10,10 @@ import Base: rand, rand!, mean, cov
 export GP, predict, SumKernel, ProdKernel, Noise, Kernel, SE, SEIso, SEArd, Periodic, Poly, RQ, RQIso, RQArd, Lin, LinIso, LinArd, Mat, Mat12Iso, Mat12Ard, Mat32Iso, Mat32Ard, Mat52Iso, Mat52Ard, MeanZero, MeanConst, MeanLin, MeanPoly, SumMean, ProdMean, optimize!, likelihood!, conditional, Gaussian, Bernoulli
 
 # all package code should be included here
+include("utils.jl")
 include("means/meanFunctions.jl")
 include("kernels/kernels.jl")
 include("likelihoods/likelihoods.jl")
-include("utils.jl")
 include("GP.jl")
 include("optimize.jl")
 
