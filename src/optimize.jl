@@ -4,7 +4,6 @@ A function for optimising the GP hyperparameters based on type II maximum likeli
 
 # Arguments:
 * `gp::GP`: Predefined Gaussian process type
-* `noise::Bool`: Noise hyperparameters should be optmized
 * `mean::Bool`: Mean function hyperparameters should be optmized
 * `kern::Bool`: Kernel function hyperparameters should be optmized
 * `kwargs`: Keyword arguments for the optimize function from the Optim package
@@ -19,7 +18,7 @@ function optimize!(gp::GP; lik::Bool=false, mean::Bool=true, kern::Bool=true, me
         return -gp.ll
     end
 
-    init = get_params(gp;  lik=lik, mean=mean, kern=kern)  # Initial hyperparameter values
+    init = [gp.v; get_params(gp;  lik=lik, mean=mean, kern=kern)]  # Initial hyperparameter values
     results = optimize(ll, init, method, kwargs...)                     # Run optimizer
     print(results)
 end

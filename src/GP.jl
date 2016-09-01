@@ -28,12 +28,12 @@ type GP{T<:Real}
     # Observation data
     nobsv::Int              # Number of observations
     X::Matrix{Float64}      # Input observations
-    y::Vector{T}      # Output observations
+    y::Vector{T}            # Output observations
+    v::Vector{Float64}      # Vector of latent (whitened) variables - N(0,1)
     data::KernelData        # Auxiliary observation data (to speed up calculations)
     dim::Int                # Dimension of inputs
     
     # Auxiliary data
-    v::Vector{Float64}      # latent whitened variables - N(0,1)
     cK::AbstractPDMat       # (k + exp(2*obsNoise))
     alpha::Vector{Float64}  # (k + exp(2*obsNoise))⁻¹y
     ll::Float64             # Log-likelihood of general GP model
@@ -52,6 +52,7 @@ type GP{T<:Real}
 
     function GP{S<:Real}(X::Matrix{Float64}, y::Vector{S}, m::Mean, k::Kernel, lik::Likelihood)
         dim, nobsv = size(X)
+        v = randn(nobsv)
         length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
         #=
         This is a vanilla implementation of a GP with a non-Gaussian
@@ -62,15 +63,14 @@ type GP{T<:Real}
         with
         L L^T = K
         =#
-        gp = new(m, k, lik, nobsv, X, y, KernelData(k, X), dim)
+        gp = new(m, k, lik, nobsv, X, y, v, KernelData(k, X), dim)
         likelihood!(gp)
         return gp
     end
 end
 
 # Creates GP object for 1D case
-# GP(x::Vector{Float64}, y::Vector{Float64}, meanf::Mean, kernel::Kernel, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, logNoise)
-# GP(x::Vector{Float64}, y::Vector, meanf::Mean, kernel::Kernel, lik::Likelihood, logNoise::Float64=-1e8) = GP(x', y, meanf, kernel, lik)
+GP(x::Vector{Float64}, y::Vector, meanf::Mean, kernel::Kernel, lik::Likelihood) = GP(x', y, meanf, kernel, lik)
 
 @doc """
     # Description
@@ -141,7 +141,7 @@ function likelihood!(gp::GP)
     μ = mean(gp.m,gp.X)
     Σ = cov(gp.k, gp.X, gp.data)
     gp.cK = PDMat(Σ + 1e-8*eye(gp.nobsv))
-    F = gp.cK*randn(gp.nobsv) + μ
+    F = gp.cK*gp.v + μ
     gp.ll = sum(loglik(gp.lik,F,gp.y))
 end
 
@@ -239,7 +239,7 @@ function conditional(gp::GP, X::Matrix{Float64})
     Sigma_raw = cov(gp.k, X) - Lck'Lck # Predictive covariance
     # Hack to get stable covariance
     fSigma = try PDMat(Sigma_raw) catch; PDMat(Sigma_raw+1e-8*sum(diag(Sigma_raw))/n*eye(n)) end
-    fmu = mean(gp.m,X) + LcK*gp.v        # Predictive mean
+    fmu = mean(gp.m,X) + Lck*gp.v        # Predictive mean
     return fmu, fSigma
 end
 
@@ -253,8 +253,9 @@ end
 
 function set_params!(gp::GP, hyp::Vector{Float64}; lik::Bool=true, mean::Bool=true, kern::Bool=true)
     # println("mean=$(mean)")
-    if lik; set_params!(gp.lik, hyp[1:num_params(gp.lik)]); end
-    if mean; set_params!(gp.m, hyp[1+num_params(gp.lik):num_params(gp.lik)+num_params(gp.m)]); end
+    gp.v = hyp[1:gp.nobsv]
+    if lik; set_params!(gp.lik, hyp[gp.nobsv+1:num_params(gp.lik)]); end
+    if mean; set_params!(gp.m, hyp[gp.nobsv+1+num_params(gp.lik):gp.nobsv+num_params(gp.lik)+num_params(gp.m)]); end
     if kern; set_params!(gp.k, hyp[end-num_params(gp.k)+1:end]); end
 end
     
