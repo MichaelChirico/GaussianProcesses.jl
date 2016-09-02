@@ -41,3 +41,6 @@ ax[:scatter](gp.X,gp.y,marker="o",label="Observations",color="black")  #plot the
 ax[:plot](xtest,l,label="Confidence Region",color="red")          
 ax[:plot](xtest,u,color="red")
 ax[:fill_between](xtest,u,l, facecolor="blue", alpha=0.25)
+
+
+out = mcmc(gp)

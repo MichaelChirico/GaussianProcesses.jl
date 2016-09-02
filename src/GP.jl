@@ -52,7 +52,7 @@ type GP{T<:Real}
 
     function GP{S<:Real}(X::Matrix{Float64}, y::Vector{S}, m::Mean, k::Kernel, lik::Likelihood)
         dim, nobsv = size(X)
-        v = randn(nobsv)
+        v = zeros(nobsv)
         length(y) == nobsv || throw(ArgumentError("Input and output observations must have consistent dimensions."))
         #=
         This is a vanilla implementation of a GP with a non-Gaussian
@@ -245,7 +245,7 @@ end
 
 function get_params(gp::GP; lik::Bool=true, mean::Bool=true, kern::Bool=true)
     params = Float64[]
-    if lik; push!(params, get_params(gp.lik)); end
+    if lik  && num_params(gp.lik)>0; push!(params, get_params(gp.lik)); end
     if mean;  append!(params, get_params(gp.m)); end
     if kern; append!(params, get_params(gp.k)); end
     return params
@@ -254,7 +254,7 @@ end
 function set_params!(gp::GP, hyp::Vector{Float64}; lik::Bool=true, mean::Bool=true, kern::Bool=true)
     # println("mean=$(mean)")
     gp.v = hyp[1:gp.nobsv]
-    if lik; set_params!(gp.lik, hyp[gp.nobsv+1:num_params(gp.lik)]); end
+    if lik  && num_params(gp.lik)>0;; set_params!(gp.lik, hyp[gp.nobsv+1:gp.nobsv+num_params(gp.lik)]); end
     if mean; set_params!(gp.m, hyp[gp.nobsv+1+num_params(gp.lik):gp.nobsv+num_params(gp.lik)+num_params(gp.m)]); end
     if kern; set_params!(gp.k, hyp[end-num_params(gp.k)+1:end]); end
 end
